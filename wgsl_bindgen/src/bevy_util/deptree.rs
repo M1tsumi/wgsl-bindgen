@@ -31,6 +31,14 @@ pub enum DependencyTreeError {
     #[label("Import statement")]
     import_bit: SourceSpan,
   },
+  #[error(transparent)]
+  CircularDependency(#[from] CircularDependencyDetails),
+}
+
+#[derive(Debug, Clone, Error)]
+#[error("Circular dependency detected in imports")]
+pub struct CircularDependencyDetails {
+  pub visited_files: Vec<(String, usize, String)>, // (file_path, line_number, import_str)
 }
 
 #[derive(Default)]
@@ -56,29 +64,15 @@ impl MaxRecursionLimiter {
     self
   }
 
-  fn check_depth(&self) {
+  fn check_depth(&self) -> Result<(), DependencyTreeError> {
     if self.files_visited.len() > Self::MAX_RECURSION_DEPTH {
-      let visited_files = self
-        .files_visited
-        .iter()
-        .map(|(path, line, import)| {
-          format!(
-            "\n{}:{}: {}",
-            path.to_string().cyan(),
-            line.to_string().purple(),
-            import.to_string().yellow()
-          )
-        })
-        .rev()
-        .collect::<String>();
-
-      panic!(
-        "{}\n{}\n{}\n",
-        "Recursion limit exceeded".red(),
-        "This error may be due to a circular dependency. The files visited during the recursion were:".red(),
-        visited_files
-       );
+      return Err(DependencyTreeError::CircularDependency(
+        CircularDependencyDetails {
+          visited_files: self.files_visited.clone(),
+        }
+      ));
     }
+    Ok(())
   }
 }
 
@@ -174,7 +168,7 @@ impl DependencyTree {
     // add self as a dependency to the parent
     parent_source.add_direct_dependency(source_path.clone());
 
-    limiter.push(import_stmt, parent_source).check_depth();
+    limiter.push(import_stmt, parent_source).check_depth()?;
 
     // if not crawled, crawl this import file
     if !self.parsed_sources.contains_key(&source_path) {
